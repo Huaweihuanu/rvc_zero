@@ -1,0 +1,2 @@
+infer-rvc-python
+torch==2.2.0
