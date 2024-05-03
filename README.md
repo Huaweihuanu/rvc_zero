@@ -8,7 +8,6 @@ sdk_version: 4.28.3
 app_file: app.py
 license: mit
 pinned: true
-header: mini
 short_description: Voice conversion framework based on VITS
 ---
 
