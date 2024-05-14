@@ -99,7 +99,7 @@ def convert_now(audio_files, random_tag, converter):
         audio_files,
         random_tag,
         overwrite=False,
-        parallel_workers=4
+        parallel_workers=8
     )
 
 
