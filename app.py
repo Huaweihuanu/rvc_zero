@@ -8,6 +8,16 @@ import time
 import soundfile as sf
 from infer_rvc_python.main import download_manager
 import zipfile
+import edge_tts
+import asyncio
+import librosa
+import traceback
+import soundfile as sf
+from pedalboard import Pedalboard, Reverb, Compressor, HighpassFilter
+from pedalboard.io import AudioFile
+from pydub import AudioSegment
+import noisereduce as nr
+import numpy as np
 
 logging.getLogger("infer_rvc_python").setLevel(logging.ERROR)
 
@@ -93,6 +103,77 @@ def find_my_model(a_, b_):
     return model, index
 
 
+def add_audio_effects(audio_list):
+    print("Audio effects")
+
+    result = []
+    for audio_path in audio_list:
+        try:
+            output_path = f'{os.path.splitext(audio_path)[0]}_effects.wav'
+        
+            # Initialize audio effects plugins
+            board = Pedalboard(
+                [
+                    HighpassFilter(),
+                    Compressor(ratio=4, threshold_db=-15),
+                    Reverb(room_size=0.10, dry_level=0.8, wet_level=0.2, damping=0.7)
+                 ]
+            )
+        
+            with AudioFile(audio_path) as f:
+                with AudioFile(output_path, 'w', f.samplerate, f.num_channels) as o:
+                    # Read one second of audio at a time, until the file is empty:
+                    while f.tell() < f.frames:
+                        chunk = f.read(int(f.samplerate))
+                        effected = board(chunk, f.samplerate, reset=False)
+                        o.write(effected)
+            result.append(output_path)
+        except Exception as e:
+            traceback.print_exc()
+            print(f"Error noisereduce: {str(e)}")
+            result.append(audio_path)
+
+    return result
+
+
+def apply_noisereduce(audio_list):
+    # https://github.com/sa-if/Audio-Denoiser
+    print("Noice reduce")
+
+    result = []
+    for audio_path in audio_list:
+        out_path = f'{os.path.splitext(audio_path)[0]}_noisereduce.wav'
+    
+        try:
+            # Load audio file
+            audio = AudioSegment.from_file(audio_path)
+    
+            # Convert audio to numpy array
+            samples = np.array(audio.get_array_of_samples())
+            
+            # Reduce noise
+            reduced_noise = nr.reduce_noise(samples, sr=audio.frame_rate, prop_decrease=0.6)
+            
+            # Convert reduced noise signal back to audio
+            reduced_audio = AudioSegment(
+                reduced_noise.tobytes(), 
+                frame_rate=audio.frame_rate, 
+                sample_width=audio.sample_width,
+                channels=audio.channels
+            )
+    
+            # Save reduced audio to file
+            reduced_audio.export(out_path, format="wav")
+            result.append(out_path)
+                    
+        except Exception as e:
+            traceback.print_exc()
+            print(f"Error noisereduce: {str(e)}")
+            result.append(audio_path)
+
+    return result
+
+
 @spaces.GPU()
 def convert_now(audio_files, random_tag, converter):
     return converter(
@@ -113,6 +194,8 @@ def run(
     r_m_f,
     e_r,
     c_b_p,
+    active_noise_reduce,
+    audio_effects,
 ):
     if not audio_files:
         raise ValueError("The audio pls")
@@ -138,9 +221,17 @@ def run(
         consonant_breath_protection=c_b_p,
         resample_sr=44100 if audio_files[0].endswith('.mp3') else 0, 
     )
-    time.sleep(0.3)
+    time.sleep(0.1)
 
-    return convert_now(audio_files, random_tag, converter)
+    result = convert_now(audio_files, random_tag, converter)
+
+    if active_noise_reduce:
+        result = apply_noisereduce(result)
+
+    if audio_effects:
+        result = add_audio_effects(result)
+    
+    return result
 
 
 def audio_conf():
@@ -245,12 +336,142 @@ def output_conf():
     )
 
 
+def active_tts_conf():
+    return gr.Checkbox(
+        False,
+        label="TTS",
+        # info="",
+        container=False,
+    )
+
+
+def tts_voice_conf():
+    return gr.Dropdown(
+        label="tts voice",
+        choices=voices,
+        visible=False,
+        value="en-US-EmmaMultilingualNeural-Female",
+    )
+
+
+def tts_text_conf():
+    return gr.Textbox(
+        value="",
+        placeholder="Write the text here...",
+        label="Text",
+        visible=False,
+        lines=3,
+    )
+
+
+def tts_button_conf():
+    return gr.Button(
+        "Process TTS",
+        variant="secondary",
+        visible=False,
+    )
+
+    
+def tts_play_conf():
+    return gr.Checkbox(
+        False,
+        label="Play",
+        # info="",
+        container=False,
+        visible=False,
+    )
+
+
+def sound_gui():
+    return gr.Audio(
+        value=None,
+        type="filepath",
+        # format="mp3",
+        autoplay=True,
+        visible=False,
+    )
+
+
+def denoise_conf():
+    return gr.Checkbox(
+        False,
+        label="Denoise",
+        # info="",
+        container=False,
+        visible=True,
+    )
+
+
+def effects_conf():
+    return gr.Checkbox(
+        False,
+        label="Effects",
+        # info="",
+        container=False,
+        visible=True,
+    )
+
+
+def infer_tts_audio(tts_voice, tts_text, play_tts):
+    out_dir = "output"
+    folder_tts = "USER_"+str(random.randint(10000, 99999))
+    
+    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(os.path.join(out_dir, folder_tts), exist_ok=True)
+    out_path = os.path.join(out_dir, folder_tts, "tts.mp3")
+    
+    asyncio.run(edge_tts.Communicate(tts_text, "-".join(tts_voice.split('-')[:-1])).save(out_path))
+    if play_tts:
+        return [out_path], out_path
+    return [out_path], None
+
+
+def show_components_tts(value_active):
+    return gr.update(
+        visible=value_active
+    ), gr.update(
+        visible=value_active
+    ), gr.update(
+        visible=value_active
+    ), gr.update(
+        visible=value_active
+    )
+
+    
 def get_gui(theme):
     with gr.Blocks(theme=theme) as app:
         gr.Markdown(title)
         gr.Markdown(description)
 
+        active_tts = active_tts_conf()
+        with gr.Row():
+            with gr.Column(scale=1):
+                tts_text = tts_text_conf()
+            with gr.Column(scale=2):
+                with gr.Row():
+                    with gr.Column():
+                        with gr.Row():
+                            tts_voice = tts_voice_conf()
+                            tts_active_play = tts_play_conf()
+
+                tts_button = tts_button_conf()
+                tts_play = sound_gui()
+
+        active_tts.change(
+            fn=show_components_tts,
+            inputs=[active_tts],
+            outputs=[tts_voice, tts_text, tts_button, tts_active_play],
+        )
+
         aud = audio_conf()
+        gr.HTML("<hr></h2>")
+
+        tts_button.click(
+            fn=infer_tts_audio,
+            inputs=[tts_voice, tts_text, tts_active_play],
+            outputs=[aud, tts_play],
+        )
+
         with gr.Column():
             with gr.Row():
                 model = model_conf()
@@ -261,6 +482,11 @@ def get_gui(theme):
         res_fc = respiration_filter_conf()
         envel_r = envelope_ratio_conf()
         const = consonant_protec_conf()
+        with gr.Row():
+            with gr.Column():
+                with gr.Row():
+                    denoise_gui = denoise_conf()
+                    effects_gui = effects_conf()
         button_base = button_conf()
         output_base = output_conf()
 
@@ -276,6 +502,8 @@ def get_gui(theme):
                 res_fc,
                 envel_r,
                 const,
+                denoise_gui,
+                effects_gui,
             ],
             outputs=[output_base],
         )
@@ -339,6 +567,9 @@ def get_gui(theme):
 
 if __name__ == "__main__":
 
+    tts_voice_list = asyncio.new_event_loop().run_until_complete(edge_tts.list_voices())
+    voices = sorted([f"{v['ShortName']}-{v['Gender']}" for v in tts_voice_list])
+    
     app = get_gui(theme)
 
     app.queue(default_concurrency_limit=40)
