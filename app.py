@@ -602,7 +602,7 @@ def get_gui(theme):
 
         down_active_gui = down_active_conf()
         down_info = gr.Markdown(
-            "Provide a link to a zip file, like this one: `https://huggingface.co/mrmocciai/Models/resolve/main/Genshin%20Impact/ayaka-v2.zip?download=true`, or separate links for the .pth and .index files, like this: `https://huggingface.co/sail-rvc/ayaka-jp/resolve/main/model.pth?download=true, https://huggingface.co/sail-rvc/ayaka-jp/resolve/main/model.index?download=true`",
+            "Provide a link to a zip file, like this one: `https://huggingface.co/mrmocciai/Models/resolve/main/Genshin%20Impact/ayaka-v2.zip?download=true`, or separate links with a comma for the .pth and .index files, like this: `https://huggingface.co/sail-rvc/ayaka-jp/resolve/main/model.pth?download=true, https://huggingface.co/sail-rvc/ayaka-jp/resolve/main/model.index?download=true`",
             visible=False
         )
         with gr.Row():
