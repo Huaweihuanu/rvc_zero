@@ -18,6 +18,9 @@ from pedalboard.io import AudioFile
 from pydub import AudioSegment
 import noisereduce as nr
 import numpy as np
+import urllib.request
+import shutil
+import threading
 
 logging.getLogger("infer_rvc_python").setLevel(logging.ERROR)
 
@@ -65,27 +68,27 @@ def find_my_model(a_, b_):
     for base_file in [a_, b_]:
         if base_file is not None and base_file.endswith(".txt"):
             txt_files.append(base_file)
-    
+
     directory = os.path.dirname(a_)
-    
+
     for txt in txt_files:
         with open(txt, 'r') as file:
             first_line = file.readline()
-    
+
         download_manager(
             url=first_line.strip(),
             path=directory,
             extension="",
         )
-    
+
     for f in find_files(directory):
         if f.endswith(".zip"):
             unzip_in_folder(f, directory)
-    
+
     model = None
     index = None
     end_files = find_files(directory)
-    
+
     for ff in end_files:
         if ff.endswith(".pth"):
             model = os.path.join(directory, ff)
@@ -96,11 +99,99 @@ def find_my_model(a_, b_):
 
     if not model:
         gr.Error(f"Model not found in: {end_files}")
-    
+
     if not index:
         gr.Warning("Index not found")
-    
+
     return model, index
+
+
+def get_file_size(url):
+
+    if "huggingface" not in url:
+        raise ValueError("Only downloads from Hugging Face are allowed")
+
+    try:
+        with urllib.request.urlopen(url) as response:
+            info = response.info()
+            content_length = info.get("Content-Length")
+
+        file_size = int(content_length)
+        if file_size > 500000000:
+            raise ValueError("The file is too large. You can only download files up to 500 MB in size.")
+
+    except Exception as e:
+        raise e
+
+
+def clear_files(directory):
+    time.sleep(15)
+    print(f"Clearing files: {directory}.")
+    shutil.rmtree(directory)
+
+
+def get_my_model(url_data):
+
+    if not url_data:
+        return None, None
+
+    if "," in url_data:
+        a_, b_ = url_data.split()
+        a_, b_ = a_.strip().replace("/blob/", "/resolve/"), b_.strip().replace("/blob/", "/resolve/")
+    else:
+        a_, b_ = url_data.strip().replace("/blob/", "/resolve/"), None
+
+    out_dir = "downloads"
+    folder_download = str(random.randint(1000, 9999))
+    directory = os.path.join(out_dir, folder_download)
+    os.makedirs(directory, exist_ok=True)
+
+    try:
+        get_file_size(a_)
+        if b_:
+            get_file_size(b_)
+
+        valid_url = [a_] if not b_ else [a_, b_]
+        for link in valid_url:
+            download_manager(
+                url=link,
+                path=directory,
+                extension="",
+            )
+
+        for f in find_files(directory):
+            if f.endswith(".zip"):
+                unzip_in_folder(f, directory)
+
+        model = None
+        index = None
+        end_files = find_files(directory)
+
+        for ff in end_files:
+            if ff.endswith(".pth"):
+                model = ff
+                gr.Info(f"Model found: {ff}")
+            if ff.endswith(".index"):
+                index = ff
+                gr.Info(f"Index found: {ff}")
+
+        if not model:
+            raise ValueError(f"Model not found in: {end_files}")
+
+        if not index:
+            gr.Warning("Index not found")
+        else:
+            index = os.path.abspath(index)
+
+        return os.path.abspath(model), index
+
+    except Exception as e:
+        raise e
+    finally:
+        # time.sleep(10)
+        # shutil.rmtree(directory)
+        t = threading.Thread(target=clear_files, args=(directory,))
+        t.start()
 
 
 def add_audio_effects(audio_list):
@@ -110,7 +201,7 @@ def add_audio_effects(audio_list):
     for audio_path in audio_list:
         try:
             output_path = f'{os.path.splitext(audio_path)[0]}_effects.wav'
-        
+
             # Initialize audio effects plugins
             board = Pedalboard(
                 [
@@ -119,7 +210,7 @@ def add_audio_effects(audio_list):
                     Reverb(room_size=0.10, dry_level=0.8, wet_level=0.2, damping=0.7)
                  ]
             )
-        
+
             with AudioFile(audio_path) as f:
                 with AudioFile(output_path, 'w', f.samplerate, f.num_channels) as o:
                     # Read one second of audio at a time, until the file is empty:
@@ -143,17 +234,17 @@ def apply_noisereduce(audio_list):
     result = []
     for audio_path in audio_list:
         out_path = f'{os.path.splitext(audio_path)[0]}_noisereduce.wav'
-    
+
         try:
             # Load audio file
             audio = AudioSegment.from_file(audio_path)
-    
+
             # Convert audio to numpy array
             samples = np.array(audio.get_array_of_samples())
-            
+
             # Reduce noise
             reduced_noise = nr.reduce_noise(samples, sr=audio.frame_rate, prop_decrease=0.6)
-            
+
             # Convert reduced noise signal back to audio
             reduced_audio = AudioSegment(
                 reduced_noise.tobytes(), 
@@ -161,11 +252,11 @@ def apply_noisereduce(audio_list):
                 sample_width=audio.sample_width,
                 channels=audio.channels
             )
-    
+
             # Save reduced audio to file
             reduced_audio.export(out_path, format="wav")
             result.append(out_path)
-                    
+
         except Exception as e:
             traceback.print_exc()
             print(f"Error noisereduce: {str(e)}")
@@ -199,7 +290,7 @@ def run(
 ):
     if not audio_files:
         raise ValueError("The audio pls")
-    
+
     if isinstance(audio_files, str):
         audio_files = [audio_files]
 
@@ -230,7 +321,7 @@ def run(
 
     if audio_effects:
         result = add_audio_effects(result)
-    
+
     return result
 
 
@@ -371,7 +462,7 @@ def tts_button_conf():
         visible=False,
     )
 
-    
+
 def tts_play_conf():
     return gr.Checkbox(
         False,
@@ -405,7 +496,7 @@ def denoise_conf():
 def effects_conf():
     return gr.Checkbox(
         False,
-        label="Effects",
+        label="Reverb",
         # info="",
         container=False,
         visible=True,
@@ -415,11 +506,11 @@ def effects_conf():
 def infer_tts_audio(tts_voice, tts_text, play_tts):
     out_dir = "output"
     folder_tts = "USER_"+str(random.randint(10000, 99999))
-    
+
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(os.path.join(out_dir, folder_tts), exist_ok=True)
     out_path = os.path.join(out_dir, folder_tts, "tts.mp3")
-    
+
     asyncio.run(edge_tts.Communicate(tts_text, "-".join(tts_voice.split('-')[:-1])).save(out_path))
     if play_tts:
         return [out_path], out_path
@@ -437,9 +528,46 @@ def show_components_tts(value_active):
         visible=value_active
     )
 
-    
+
+def down_active_conf():
+    return gr.Checkbox(
+        False,
+        label="URL-to-Model",
+        # info="",
+        container=False,
+    )
+
+
+def down_url_conf():
+    return gr.Textbox(
+        value="",
+        placeholder="Write the url here...",
+        label="Enter URL",
+        visible=False,
+        lines=1,
+    )
+
+
+def down_button_conf():
+    return gr.Button(
+        "Process",
+        variant="secondary",
+        visible=False,
+    )
+
+
+def show_components_down(value_active):
+    return gr.update(
+        visible=value_active
+    ), gr.update(
+        visible=value_active
+    ), gr.update(
+        visible=value_active
+    )
+
+
 def get_gui(theme):
-    with gr.Blocks(theme=theme) as app:
+    with gr.Blocks(theme=theme, delete_cache=(3200, 3200)) as app:
         gr.Markdown(title)
         gr.Markdown(description)
 
@@ -464,7 +592,7 @@ def get_gui(theme):
         )
 
         aud = audio_conf()
-        gr.HTML("<hr></h2>")
+        # gr.HTML("<hr>")
 
         tts_button.click(
             fn=infer_tts_audio,
@@ -472,10 +600,34 @@ def get_gui(theme):
             outputs=[aud, tts_play],
         )
 
+        down_active_gui = down_active_conf()
+        down_info = gr.Markdown(
+            "Provide a link to a zip file, like this one: `https://huggingface.co/mrmocciai/Models/resolve/main/Genshin%20Impact/ayaka-v2.zip?download=true`, or separate links for the .pth and .index files, like this: `https://huggingface.co/sail-rvc/ayaka-jp/resolve/main/model.pth?download=true, https://huggingface.co/sail-rvc/ayaka-jp/resolve/main/model.index?download=true`",
+            visible=False
+        )
+        with gr.Row():
+            with gr.Column(scale=3):
+                down_url_gui = down_url_conf()
+            with gr.Column(scale=1):
+                down_button_gui = down_button_conf()
+
         with gr.Column():
             with gr.Row():
                 model = model_conf()
                 indx = index_conf()
+
+        down_active_gui.change(
+            show_components_down,
+            [down_active_gui],
+            [down_info, down_url_gui, down_button_gui]
+        )
+
+        down_button_gui.click(
+            get_my_model,
+            [down_url_gui],
+            [model, indx]
+        )
+
         algo = pitch_algo_conf()
         algo_lvl = pitch_lvl_conf()
         indx_inf = index_inf_conf()
@@ -508,7 +660,6 @@ def get_gui(theme):
             outputs=[output_base],
         )
 
-        
         gr.Examples(
             examples=[
                 [
@@ -544,7 +695,7 @@ def get_gui(theme):
                     0.25,
                     0.50,
                 ],
-                
+
             ],
             fn=run,
             inputs=[
@@ -569,7 +720,7 @@ if __name__ == "__main__":
 
     tts_voice_list = asyncio.new_event_loop().run_until_complete(edge_tts.list_voices())
     voices = sorted([f"{v['ShortName']}-{v['Gender']}" for v in tts_voice_list])
-    
+
     app = get_gui(theme)
 
     app.queue(default_concurrency_limit=40)
@@ -580,4 +731,5 @@ if __name__ == "__main__":
         show_error=True,
         quiet=False,
         debug=False,
+        allowed_paths=["./downloads/"],
     )
