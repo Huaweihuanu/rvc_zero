@@ -294,6 +294,12 @@ def run(
     if isinstance(audio_files, str):
         audio_files = [audio_files]
 
+    try:
+        duration_base = librosa.get_duration(filename=audio_files[0])
+        print("Duration:", duration_base)
+    except Exception as e:
+        print(e)
+
     if file_m is not None and file_m.endswith(".txt"):
         file_m, file_index = find_my_model(file_m, file_index)
         print(file_m, file_index)
